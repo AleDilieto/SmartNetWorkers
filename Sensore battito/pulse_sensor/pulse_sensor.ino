@@ -1,255 +1,164 @@
-#include <LiquidCrystal.h>
+int pulsePin = 0;                 // Sensore battito collegato al pin analogico 0
 
-//  Variables
-int pulsePin = 0;                 // Pulse Sensor purple wire connected to analog pin 0
-int blinkPin = 13;                // pin to blink led at each beat
-int fadePin = 8;                  // pin to do fancy classy fading blink at each beat
-int fadeRate = 0;                 // used to fade LED on with PWM on fadePin
+volatile int BPM;                   // Battiti al minuto
+volatile int Signal;                // Valore analogico ottenuto dal pin analogico 0
+volatile int IBI = 600;             // Intervallo di tempo fra i battiti
+volatile boolean Pulse = false;     // Vero quando il battito è in corso
+volatile boolean QS = false;        // Vero quando viene trovato un battito
 
-LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+volatile int rate[10];                      // array che memorizza gli ultimi 10 IBI
+volatile unsigned long sampleCounter = 0;          // Variabile utilizzata il conteggio del tempo
+volatile unsigned long lastBeatTime = 0;           // Variabile utilizzata che contiene il tempo dell'ultimo battito
+                                                      // per trovare l'IBI
+volatile int P = 512;                      // Variabile utilizzata per trovare il massimo in una pulsazione
+volatile int T = 512;                     // Varibile utilizzata per trovare il minimo in una pulsazione
+volatile int thresh = 525;                // Variabile utilizzata per trovare il momento esatto del battito
+volatile int amp = 100;                   // Ampiezza del battito
+volatile boolean firstBeat = true;        // Variabile utilizzata per capire se è il primo battito
+volatile boolean secondBeat = false;      // Variabile utilizzata per capire se è il secondo battito
 
-// Volatile Variables, used in the interrupt service routine!
-volatile int BPM;                   // int that holds raw Analog in 0. updated every 2mS
-volatile int Signal;                // holds the incoming raw data
-volatile int IBI = 600;             // int that holds the time interval between beats! Must be seeded! 
-volatile boolean Pulse = false;     // "True" when User's live heartbeat is detected. "False" when not a "live beat". 
-volatile boolean QS = false;        // becomes true when Arduoino finds a beat.
-
-// Regards Serial OutPut  -- Set This Up to your needs
-static boolean serialVisual = false;   // Set to 'false' by Default.  Re-set to 'true' to see Arduino Serial Monitor ASCII Visual Pulse 
-
-volatile int rate[10];                      // array to hold last ten IBI values
-volatile unsigned long sampleCounter = 0;          // used to determine pulse timing
-volatile unsigned long lastBeatTime = 0;           // used to find IBI
-volatile int P = 512;                      // used to find peak in pulse wave, seeded
-volatile int T = 512;                     // used to find trough in pulse wave, seeded
-volatile int thresh = 525;                // used to find instant moment of heart beat, seeded
-volatile int amp = 100;                   // used to hold amplitude of pulse waveform, seeded
-volatile boolean firstBeat = true;        // used to seed rate array so we startup with reasonable BPM
-volatile boolean secondBeat = false;      // used to seed rate array so we startup with reasonable BPM
-
+// === SETUP =======================================================================================================
 void setup()
 {
-  pinMode(blinkPin,OUTPUT);         // pin that will blink to your heartbeat!
-  pinMode(fadePin,OUTPUT);          // pin that will fade to your heartbeat!
-  Serial.begin(115200);             // we agree to talk fast!
-  interruptSetup();                 // sets up to read Pulse Sensor signal every 2mS 
-                                    // IF YOU ARE POWERING The Pulse Sensor AT VOLTAGE LESS THAN THE BOARD VOLTAGE, 
-                                    // UN-COMMENT THE NEXT LINE AND APPLY THAT VOLTAGE TO THE A-REF PIN
-                                    //   analogReference(EXTERNAL);   
+  Serial.begin(9600);
+  while (!Serial) {;}
+  interruptSetup();                 // Imposta la lettura del battito cardiaco ogni 2ms
 }
 
-
-//  Where the Magic Happens
+// === LOOP ========================================================================================================
 void loop()
 {
    serialOutput();  
    
-  if (QS == true) // A Heartbeat Was Found
+  if (QS == true) // Se è stato trovato un battito
     {     
-      // BPM and IBI have been Determined
-      // Quantified Self "QS" true when arduino finds a heartbeat
-      fadeRate = 255; // Makes the LED Fade Effect Happen, Set 'fadeRate' Variable to 255 to fade LED with pulse
-      serialOutputWhenBeatHappens(); // A Beat Happened, Output that to serial.     
-      QS = false; // reset the Quantified Self flag for next time    
+      // (BPM e IBI) sono già stati determinati
+      serialOutputWhenBeatHappens(); // Output su seriale    
+      QS = false; // Reset di QS per il prossimo battito   
     }
-     
-  ledFadeToBeat(); // Makes the LED Fade Effect Happen 
-  delay(20); //  take a break
+   
+  delay(20);
 }
 
-void ledFadeToBeat()
-{
-   fadeRate -= 15;                         //  set LED fade value
-   fadeRate = constrain(fadeRate,0,255);   //  keep LED fade value from going into negative numbers!
-   analogWrite(fadePin,fadeRate);          //  fade LED
-}
-
+// === INTERRUPT SETUP =============================================================================================
 void interruptSetup()
 {     
-  // Initializes Timer2 to throw an interrupt every 2mS.
-  TCCR2A = 0x02;     // DISABLE PWM ON DIGITAL PINS 3 AND 11, AND GO INTO CTC MODE
-  TCCR2B = 0x06;     // DON'T FORCE COMPARE, 256 PRESCALER 
-  OCR2A = 0X7C;      // SET THE TOP OF THE COUNT TO 124 FOR 500Hz SAMPLE RATE
-  TIMSK2 = 0x02;     // ENABLE INTERRUPT ON MATCH BETWEEN TIMER2 AND OCR2A
-  sei();             // MAKE SURE GLOBAL INTERRUPTS ARE ENABLED      
+  // Inizializza il timer per lanciare un interrupt ogni 2ms
+  TCCR2A = 0x02;
+  TCCR2B = 0x06;
+  OCR2A = 0X7C;
+  TIMSK2 = 0x02;
+  sei();             // Abilitazione interrupt     
 } 
 
+// === SERIAL OUTPUT ===============================================================================================
 void serialOutput()
-{   // Decide How To Output Serial. 
- if (serialVisual == true)
-  {  
-     arduinoSerialMonitorVisual('-', Signal);   // goes to function that makes Serial Monitor Visualizer
-  } 
- else
-  {
-      sendDataToSerial('S', Signal);     // goes to sendDataToSerial function
-   }        
+{
+  sendDataToSerial('S', Signal);     // Invia i dati alla seriale    
 }
 
+// === SERIAL OUTPUT WHEN BEAT HAPPENS =============================================================================
 void serialOutputWhenBeatHappens()
 {    
- if (serialVisual == true) //  Code to Make the Serial Monitor Visualizer Work
-   {            
-     Serial.print("*** Heart-Beat Happened *** ");  //ASCII Art Madness
-     Serial.print("BPM: ");
-     Serial.println(BPM);
-     lcd.clear();
-     lcd.print("BPM: ");
-     lcd.print(BPM);
-   }
- else
-   {
-     sendDataToSerial('B',BPM);   // send heart rate with a 'B' prefix
-     sendDataToSerial('Q',IBI);   // send time between beats with a 'Q' prefix
-   }   
+ 
+     sendDataToSerial('B',BPM);
+     sendDataToSerial('Q',IBI);
 }
 
-void arduinoSerialMonitorVisual(char symbol, int data )
-{    
-  const int sensorMin = 0;      // sensor minimum, discovered through experiment
-  const int sensorMax = 1024;    // sensor maximum, discovered through experiment
-  int sensorReading = data; // map the sensor range to a range of 12 options:
-  int range = map(sensorReading, sensorMin, sensorMax, 0, 11);
-  // do something different depending on the 
-  // range value:
-  switch (range) 
-  {
-    case 0:     
-      Serial.println("");     /////ASCII Art Madness
-      break;
-    case 1:   
-      Serial.println("---");
-      break;
-    case 2:    
-      Serial.println("------");
-      break;
-    case 3:    
-      Serial.println("---------");
-      break;
-    case 4:   
-      Serial.println("------------");
-      break;
-    case 5:   
-      Serial.println("--------------|-");
-      break;
-    case 6:   
-      Serial.println("--------------|---");
-      break;
-    case 7:   
-      Serial.println("--------------|-------");
-      break;
-    case 8:  
-      Serial.println("--------------|----------");
-      break;
-    case 9:    
-      Serial.println("--------------|----------------");
-      break;
-    case 10:   
-      Serial.println("--------------|-------------------");
-      break;
-    case 11:   
-      Serial.println("--------------|-----------------------");
-      break;
-  } 
-}
-
-
+// === SEND DATA TO SERIAL =========================================================================================
 void sendDataToSerial(char symbol, int data )
 {
    Serial.print(symbol);
    Serial.println(data);                
 }
 
-ISR(TIMER2_COMPA_vect) //triggered when Timer2 counts to 124
+// === ISR =========================================================================================================
+ISR(TIMER2_COMPA_vect) // Interrupt Service Routine
 {  
-  cli();                                      // disable interrupts while we do this
-  Signal = analogRead(pulsePin);              // read the Pulse Sensor 
-  sampleCounter += 2;                         // keep track of the time in mS with this variable
-  int N = sampleCounter - lastBeatTime;       // monitor the time since the last beat to avoid noise
-                                              //  find the peak and trough of the pulse wave
-  if(Signal < thresh && N > (IBI/5)*3) // avoid dichrotic noise by waiting 3/5 of last IBI
+  cli();                                      // Disabilitazione interrupt
+  Signal = analogRead(pulsePin);              // Lettura segnale analogico
+  sampleCounter += 2;                         // Aggiornamento tempo
+  int N = sampleCounter - lastBeatTime;       // Tempo dall'ultimo battito
+
+  // Ricerca del minimo della pulsazione
+  // (thresh rappresenta il valor medio del battito)
+  if(Signal < thresh && N > (IBI/5)*3) // Si aspetta 3/5 dell'ultimo IBI per evitare disturbi
     {      
-      if (Signal < T) // T is the trough
+      if (Signal < T)
       {                        
-        T = Signal; // keep track of lowest point in pulse wave 
+        T = Signal;
       }
     }
 
+  // Ricerca del massimo della pulsazione
   if(Signal > thresh && Signal > P)
-    {          // thresh condition helps avoid noise
-      P = Signal;                             // P is the peak
-    }                                        // keep track of highest point in pulse wave
+    {
+      P = Signal;
+    }
 
-  //  NOW IT'S TIME TO LOOK FOR THE HEART BEAT
-  // signal surges up in value every time there is a pulse
+  // Ricerca del battito cardiaco
   if (N > 250)
-  {                                   // avoid high frequency noise
-    if ( (Signal > thresh) && (Pulse == false) && (N > (IBI/5)*3) )
+  {
+    if ( (Signal > thresh) && (Pulse == false) && (N > (IBI/5)*3) ) // Per evitare disturbi
       {        
-        Pulse = true;                               // set the Pulse flag when we think there is a pulse
-        digitalWrite(blinkPin,HIGH);                // turn on pin 13 LED
-        IBI = sampleCounter - lastBeatTime;         // measure time between beats in mS
-        lastBeatTime = sampleCounter;               // keep track of time for next pulse
+        Pulse = true;                               // Si pensa di aver trovato un battito
+        IBI = sampleCounter - lastBeatTime;         // Calcolo dell'IBI
+        lastBeatTime = sampleCounter;               // Aggiornamento del tempo dell'ultimo battito
   
-        if(secondBeat)
-        {                        // if this is the second beat, if secondBeat == TRUE
-          secondBeat = false;                  // clear secondBeat flag
-          for(int i=0; i<=9; i++) // seed the running total to get a realisitic BPM at startup
+        if(secondBeat) // Se è il secondo battito
+        {
+          secondBeat = false;                  
+          for(int i=0; i<=9; i++) // Inizializza il vettore di IBI
           {             
             rate[i] = IBI;                      
           }
         }
   
-        if(firstBeat) // if it's the first time we found a beat, if firstBeat == TRUE
+        if(firstBeat) // Se è la prima volta che si trova una pulsazione
         {                         
-          firstBeat = false;                   // clear firstBeat flag
-          secondBeat = true;                   // set the second beat flag
-          sei();                               // enable interrupts again
-          return;                              // IBI value is unreliable so discard it
+          firstBeat = false;                   
+          secondBeat = true;                   
+          sei();                               // Abilitazione interrupt
+          return;                              // Essendo la prima pulsazione,
+                                                  // IBI non è affidabile e quindi viene scartato
         }   
-      // keep a running total of the last 10 IBI values
-      word runningTotal = 0;                  // clear the runningTotal variable    
+      
+      word runningTotal = 0;                  // Totale degli IBI, inizializzato a 0   
 
-      for(int i=0; i<=8; i++)
-        {                // shift data in the rate array
-          rate[i] = rate[i+1];                  // and drop the oldest IBI value 
-          runningTotal += rate[i];              // add up the 9 oldest IBI values
+      for(int i=0; i<=8; i++) // Gli ultimi 10 IBI vengono shiftati di 1
+        {
+          rate[i] = rate[i+1];
+          runningTotal += rate[i];              // Viene calcolato il totale degli IBI
         }
 
-      rate[9] = IBI;                          // add the latest IBI to the rate array
-      runningTotal += rate[9];                // add the latest IBI to runningTotal
-      runningTotal /= 10;                     // average the last 10 IBI values 
-      BPM = 60000/runningTotal;               // how many beats can fit into a minute? that's BPM!
-      QS = true;                              // set Quantified Self flag 
-      // QS FLAG IS NOT CLEARED INSIDE THIS ISR
+      rate[9] = IBI;                          // Aggiunta dell'ultimo IBI all'array di IBI
+      runningTotal += rate[9];                // Aggiunta dell'ultimo IBI al totale degli IBI
+      runningTotal /= 10;                     // Calcolo della media degli ultimi 10 IBI
+      BPM = 60000/runningTotal;               // Calcolo BPM (60000 ms = 1 min)
+      QS = true;                              // E' stato trovato un battito
     }                       
   }
 
-  if (Signal < thresh && Pulse == true)
-    {   // when the values are going down, the beat is over
-      digitalWrite(blinkPin,LOW);            // turn off pin 13 LED
-      Pulse = false;                         // reset the Pulse flag so we can do it again
-      amp = P - T;                           // get amplitude of the pulse wave
-      thresh = amp/2 + T;                    // set thresh at 50% of the amplitude
-      P = thresh;                            // reset these for next time
-      T = thresh;
+  if (Signal < thresh && Pulse == true) // Quando i valori diventano bassi, la pulsazione è finita
+    {
+      Pulse = false;                         // Reset variabile Pulse
+      amp = P - T;                           // Calcolo ampiezza del battito
+      thresh = amp/2 + T;                    // Impostazione thresh alla metà dell'ampiezza
+      P = thresh;                            // Reset massimo
+      T = thresh;                            // Reset minimo
     }
 
-  if (N > 2500)
-    {                           // if 2.5 seconds go by without a beat
-      thresh = 512;                          // set thresh default
-      P = 512;                               // set P default
-      T = 512;                               // set T default
-      lastBeatTime = sampleCounter;          // bring the lastBeatTime up to date        
-      firstBeat = true;                      // set these to avoid noise
-      secondBeat = false;                    // when we get the heartbeat back
+  if (N > 2500) // Se sono passati più di 2 secondi dall'ultimo battito
+    {
+      thresh = 512;                          // Reset thresh
+      P = 512;                               // Reset massimo
+      T = 512;                               // Reset minimo
+      lastBeatTime = sampleCounter;          // La variabile lastBeatTime deve essere mantenuta "al passo"
+      
+      // Reset di firstBeat e secondBeat per evitare disturbi al prossimo battito 
+      firstBeat = true;
+      secondBeat = false;
     }
 
-  sei();                                   // enable interrupts when youre done!
-}// end isr
-
-
-
-
-
+  sei();                                   // Abilitazione interrupt
+}
