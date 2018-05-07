@@ -54,7 +54,7 @@ void interruptSetup()
 // === SERIAL OUTPUT ===============================================================================================
 void serialOutput()
 {
-  sendDataToSerial('S', Signal);     // Invia i dati alla seriale    
+  //sendDataToSerial('S', Signal);     // Invia i dati alla seriale    
 }
 
 // === SERIAL OUTPUT WHEN BEAT HAPPENS =============================================================================
@@ -62,7 +62,7 @@ void serialOutputWhenBeatHappens()
 {    
  
      sendDataToSerial('B',BPM);
-     sendDataToSerial('Q',IBI);
+     //sendDataToSerial('Q',IBI);
 }
 
 // === SEND DATA TO SERIAL =========================================================================================
@@ -100,7 +100,8 @@ ISR(TIMER2_COMPA_vect) // Interrupt Service Routine
   if (N > 250)
   {
     if ( (Signal > thresh) && (Pulse == false) && (N > (IBI/5)*3) ) // Per evitare disturbi
-      {        
+      {       
+        //Serial.println("Trovato");
         Pulse = true;                               // Si pensa di aver trovato un battito
         IBI = sampleCounter - lastBeatTime;         // Calcolo dell'IBI
         lastBeatTime = sampleCounter;               // Aggiornamento del tempo dell'ultimo battito
